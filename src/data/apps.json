@@ -1,10 +1,4 @@
 {
-  "meta": {
-    "schema": "apps-catalog-tagline-only-v1",
-    "source": "bookmarks.html",
-    "count": 681,
-    "notes": "tagline contains merged folder/category tags, comma-separated; no tags field"
-  },
   "apps": [
     {
       "id": "get-help-support-mozilla-org",

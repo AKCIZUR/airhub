@@ -35,6 +35,70 @@ const gridApps = computed(() => filterBy("", selectedTags.value))
 const searchResults = computed(() => filterBy(searchQuery.value, selectedTags.value))
 const locale = computed(() => (language.value === "cz" ? "cs-CZ" : "en-US"))
 
+const gridWrapEl = ref<HTMLElement | null>(null)
+const layoutTick = ref(0)
+const currentPage = ref(1)
+let layoutObserver: ResizeObserver | null = null
+
+function touchLayout() {
+  layoutTick.value += 1
+}
+
+function updateViewport() {
+  touchLayout()
+}
+
+const pageSize = computed(() => {
+  // make pagination respond to both the viewport and the container's live size
+  layoutTick.value
+  const wrap = gridWrapEl.value
+  const width = wrap?.clientWidth ?? window.innerWidth
+  const height = wrap?.clientHeight ?? Math.max(320, window.innerHeight - 260)
+  const gapX = 8
+  const gapY = Math.max(22, Math.round(iconSize.value * 0.28))
+  const columns = width <= 540
+    ? 4
+    : Math.max(1, Math.floor((width + gapX) / (gridMin.value + gapX)))
+  const cardHeight = Math.round(iconSize.value + 44)
+  const rows = Math.max(1, Math.floor((height + gapY) / (cardHeight + gapY)))
+  return Math.max(1, columns * rows)
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(gridApps.value.length / pageSize.value)))
+
+const pagedApps = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return gridApps.value.slice(start, start + pageSize.value)
+})
+
+const visiblePages = computed(() => {
+  const total = totalPages.value
+  const current = Math.min(Math.max(currentPage.value, 1), total)
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1)
+  }
+
+  const pages = new Set<number>([1, total])
+
+  for (let i = current - 1; i <= current + 1; i += 1) {
+    if (i > 1 && i < total) pages.add(i)
+  }
+
+  if (current <= 3) {
+    ;[2, 3, 4].forEach((p) => {
+      if (p < total) pages.add(p)
+    })
+  }
+
+  if (current >= total - 2) {
+    ;[total - 3, total - 2, total - 1].forEach((p) => {
+      if (p > 1) pages.add(p)
+    })
+  }
+
+  return Array.from(pages).filter((p) => p >= 1 && p <= total).sort((a, b) => a - b)
+})
+
 const ui = computed(() => {
   if (language.value === "cz") {
     return {
@@ -138,6 +202,17 @@ watch(gridMin, (value) => {
   localStorage.setItem("airmode-grid-min", String(value))
 })
 
+watch(
+  () => selectedTags.value.join("|"),
+  () => {
+    currentPage.value = 1
+  },
+)
+
+watch([gridApps, pageSize], () => {
+  currentPage.value = Math.min(Math.max(currentPage.value, 1), totalPages.value)
+}, { immediate: true })
+
 function focusApp(app: AppEntry) {
   hoveredApp.value = app
 }
@@ -150,6 +225,10 @@ function toggleTag(tag: string) {
 
 function clearTags() {
   selectedTags.value = []
+}
+
+function setPage(page: number) {
+  currentPage.value = Math.min(Math.max(1, page), totalPages.value)
 }
 
 function openApp(app: AppEntry) {
@@ -202,11 +281,20 @@ function onKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   window.addEventListener("keydown", onKeydown)
+  window.addEventListener("resize", updateViewport, { passive: true })
   clockTimer = window.setInterval(() => (now.value = new Date()), 1000)
+
+  updateViewport()
+  layoutObserver = new ResizeObserver(() => updateViewport())
+  if (gridWrapEl.value) layoutObserver.observe(gridWrapEl.value)
 })
+
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown)
+  window.removeEventListener("resize", updateViewport)
   window.clearInterval(clockTimer)
+  layoutObserver?.disconnect()
+  layoutObserver = null
 })
 </script>
 
@@ -260,8 +348,22 @@ onBeforeUnmount(() => {
         />
       </div>
 
-      <section class="grid-wrap">
-        <AppGrid :apps="gridApps" :icon-size="iconSize" :cell-min="gridMin" @open="openApp" @focus="focusApp" />
+      <section ref="gridWrapEl" class="grid-wrap">
+        <AppGrid :apps="pagedApps" :icon-size="iconSize" :cell-min="gridMin" @open="openApp" @focus="focusApp" />
+
+        <nav v-if="totalPages > 1" class="pager" aria-label="Stránky ikon">
+          <button
+            v-for="page in visiblePages"
+            :key="page"
+            class="page-btn"
+            :class="{ active: page === currentPage }"
+            type="button"
+            :aria-label="`Stránka ${page}`"
+            @click="setPage(page)"
+          >
+            {{ page }}
+          </button>
+        </nav>
       </section>
 
       <footer class="hint">
@@ -502,6 +604,48 @@ onBeforeUnmount(() => {
   margin-top: 30px;
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding: 10px 12px 0;
+}
+
+.page-btn {
+  min-width: 38px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  transition:
+    color 0.2s var(--ease),
+    background 0.2s var(--ease),
+    border-color 0.2s var(--ease),
+    transform 0.2s var(--ease),
+    box-shadow 0.2s var(--ease);
+}
+.page-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  transform: translateY(-1px);
+}
+.page-btn.active {
+  color: #fff;
+  background: linear-gradient(180deg, rgba(var(--c-rgb), 1), rgba(var(--c-rgb), 0.76));
+  border-color: rgba(var(--c-rgb), 0.62);
+  box-shadow: 0 10px 24px -14px rgba(var(--c-rgb), 0.65);
 }
 
 .hint {
